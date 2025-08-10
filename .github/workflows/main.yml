@@ -23,6 +23,7 @@ jobs:
     name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
+    if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
