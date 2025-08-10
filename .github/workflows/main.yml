@@ -1,324 +1,417 @@
-name: workflow
+name: CI/CD Pipeline
+
 on:
   push:
-    branches:
-      - main
-    paths-ignore:
-      - 'README.md'
+    branches: [main, develop]
+    paths-ignore: 
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+  IMAGE_TAG: ${{ github.sha }}
+  CONTAINER_NAME: networksecurity
+  APP_PORT: 8000
+
 jobs:
-  integration:
-    name: Continuous Integration
+  # ==============================================================================
+  # CONTINUOUS INTEGRATION
+  # ==============================================================================
+  ci:
+    name: 🔍 Code Quality & Testing
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      should-deploy: ${{ steps.changes.outputs.should-deploy }}
+      
     steps:
-      - name: Checkout Code
+      - name: 📥 Checkout Code
         uses: actions/checkout@v4
-      - name: Lint code
-        run: echo "Linting repository"
-      - name: Run unit tests
-        run: echo "Running unit tests"
-        
-  build-and-push-ecr-image:
-    name: Continuous Delivery
-    needs: integration
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        
-      - name: Install Utilities
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
-          
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          fetch-depth: 0  # Needed for proper diff analysis
+
+      - name: 🔍 Detect Changes
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            should-deploy:
+              - 'src/**'
+              - 'requirements.txt'
+              - 'Dockerfile'
+              - 'app.py'
+              - '.github/workflows/**'
+
+      - name: 🐍 Setup Python
+        if: steps.changes.outputs.should-deploy == 'true'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
           
-      - name: Verify AWS Configuration
+      - name: 📦 Install Dependencies
+        if: steps.changes.outputs.should-deploy == 'true'
         run: |
-          echo "AWS Region: ${{ secrets.AWS_REGION }}"
-          echo "ECR Repository: ${{ secrets.ECR_REPOSITORY_NAME }}"
-          aws sts get-caller-identity
-          
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-        
-      - name: Check repository files and structure
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          # Install dev dependencies for linting/testing
+          pip install flake8 pytest black isort safety bandit
+
+      - name: 🧹 Code Formatting Check
+        if: steps.changes.outputs.should-deploy == 'true'
         run: |
-          echo "Repository contents:"
-          ls -la
-          echo ""
-          echo "Checking for required files..."
-          
-          # Check requirements.txt
-          if [ ! -f requirements.txt ]; then
-            echo "ERROR: requirements.txt not found"
-            exit 1
+          black --check --diff .
+          isort --check-only --diff .
+
+      - name: 🔍 Lint Code
+        if: steps.changes.outputs.should-deploy == 'true'
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: 🔒 Security Scan
+        if: steps.changes.outputs.should-deploy == 'true'
+        run: |
+          safety check
+          bandit -r . -f json -o bandit-report.json || true
+
+      - name: 🧪 Run Tests
+        if: steps.changes.outputs.should-deploy == 'true'
+        run: |
+          if [ -d "tests" ]; then
+            python -m pytest tests/ -v --tb=short
           else
-            echo "✓ requirements.txt found"
-            echo "Contents:"
-            cat requirements.txt
-          fi
-          
-          # Check app.py
-          if [ ! -f app.py ]; then
-            echo "ERROR: app.py not found"
-            exit 1
-          else
-            echo "✓ app.py found"
-          fi
-          
-          # Check if networksecurity directory exists
-          if [ ! -d networksecurity ]; then
-            echo "WARNING: networksecurity directory not found"
-            echo "Creating placeholder structure..."
-            mkdir -p networksecurity/templates
-            echo '<html><body><h1>Placeholder Template</h1>{{table}}</body></html>' > networksecurity/templates/table.html
-          else
-            echo "✓ networksecurity directory found"
-          fi
-          
-          # Check Dockerfile
-          if [ ! -f Dockerfile ]; then
-            echo "ERROR: Dockerfile not found"
-            exit 1
-          else
-            echo "✓ Dockerfile found"
-            echo "Dockerfile contents:"
-            cat Dockerfile
+            echo "No tests directory found, skipping tests"
           fi
 
-      - name: Create ECR repository if it doesn't exist
-        env:
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          echo "Checking if ECR repository exists..."
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region ${{ secrets.AWS_REGION }} 2>/dev/null || {
-            echo "Repository doesn't exist, creating..."
-            aws ecr create-repository --repository-name $ECR_REPOSITORY --region ${{ secrets.AWS_REGION }}
-            echo "Repository created successfully"
-          }
-          echo "ECR repository is ready"
-          
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
-        run: |
-          set -e  # Exit on any error
-          
-          echo "Building Docker image..."
-          echo "Registry: $ECR_REGISTRY"
-          echo "Repository: $ECR_REPOSITORY" 
-          echo "Tag: $IMAGE_TAG"
-          echo "Full image name: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          
-          # Build the Docker image with detailed output
-          echo "Starting Docker build..."
-          docker build --no-cache --progress=plain -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG . 2>&1 | tee build.log
-          
-          # Check if build was successful
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ Docker build failed!"
-            echo "Last 50 lines of build log:"
-            tail -50 build.log
-            echo ""
-            echo "Full build log:"
-            cat build.log
-            exit 1
-          fi
-          
-          echo "✅ Docker build successful!"
-          echo "Verifying image was created..."
-          docker images | grep $ECR_REPOSITORY || {
-            echo "❌ Image not found after build"
-            exit 1
-          }
-          
-          echo "📤 Pushing to ECR..."
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG 2>&1 | tee push.log
-          
-          # Check if push was successful
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ Docker push failed!"
-            echo "Push log:"
-            cat push.log
-            exit 1
-          fi
-          
-          echo "✅ Docker push successful!"
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-          
-  continuous-deployment:
-    name: Continuous Deployment
-    needs: build-and-push-ecr-image
-    runs-on: self-hosted
+      - name: 📊 Upload Test Results
+        if: always() && steps.changes.outputs.should-deploy == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            bandit-report.json
+            .coverage
+          retention-days: 7
+
+  # ==============================================================================
+  # BUILD AND PUSH TO ECR
+  # ==============================================================================
+  build:
+    name: 🏗️ Build & Push Container
+    runs-on: ubuntu-latest
+    needs: ci
+    if: needs.ci.outputs.should-deploy == 'true' && github.ref == 'refs/heads/main'
+    timeout-minutes: 30
+    
+    outputs:
+      image-uri: ${{ steps.build.outputs.image }}
+      image-digest: ${{ steps.build.outputs.digest }}
+      
     steps:
-      - name: Pre-cleanup Git configuration
-        run: |
-          echo "Cleaning up any existing Git configuration issues..."
-          git config --global --unset-all safe.directory || true
-          git config --local --unset-all core.sshCommand || true
-          git config --local --unset-all http.https://github.com/.extraheader || true
-        continue-on-error: true
-        
-      - name: Configure AWS credentials
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.12.0
+
+      - name: 🏷️ Extract Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: ☁️ Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-          
-      - name: Verify self-hosted runner environment
-        run: |
-          echo "=== System Information ==="
-          uname -a
-          echo ""
-          echo "=== Docker Version ==="
-          docker --version || echo "Docker not installed"
-          echo ""
-          echo "=== AWS CLI Version ==="
-          aws --version || echo "AWS CLI not installed"
-          echo ""
-          echo "=== Available Disk Space ==="
-          df -h
-          echo ""
-          echo "=== Current Docker Images ==="
-          docker images || echo "Cannot list Docker images"
-          echo ""
-          echo "=== Current Docker Containers ==="
-          docker ps -a || echo "Cannot list Docker containers"
-        
-      - name: Verify AWS credentials
-        run: |
-          echo "Testing AWS credentials..."
-          aws sts get-caller-identity || {
-            echo "❌ AWS credentials verification failed"
-            exit 1
-          }
-          echo "✅ AWS credentials working"
-          
-      - name: Login to Amazon ECR
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+
+      - name: 🔑 Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-        
-      - name: Verify ECR login
+        with:
+          mask-password: true
+
+      - name: 🏗️ Ensure ECR Repository Exists
         run: |
-          echo "ECR Registry: ${{ steps.login-ecr.outputs.registry }}"
-          echo "Testing ECR access..."
-          aws ecr describe-repositories --repository-names ${{ secrets.ECR_REPOSITORY_NAME }} || {
-            echo "❌ Cannot access ECR repository"
-            exit 1
-          }
-          echo "✅ ECR access verified"
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --image-scanning-configuration scanOnPush=true \
+            --encryption-configuration encryptionType=AES256
+
+      - name: 🔍 Validate Application Files
+        run: |
+          required_files=("requirements.txt" "app.py" "Dockerfile")
+          for file in "${required_files[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "❌ Required file missing: $file"
+              exit 1
+            fi
+            echo "✅ Found: $file"
+          done
           
-      - name: Pull latest images
+          # Create missing directories if needed
+          if [[ ! -d "networksecurity" ]]; then
+            echo "⚠️ Creating networksecurity directory structure..."
+            mkdir -p networksecurity/templates
+            echo '<html><body><h1>Network Security App</h1>{{table}}</body></html>' > networksecurity/templates/table.html
+          fi
+
+      - name: 🐳 Build and Push Docker Image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            REVISION=${{ github.sha }}
+
+      - name: 🔍 Scan Image for Vulnerabilities
         run: |
-          echo "Pulling image: ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest"
-          docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest || {
-            echo "❌ Failed to pull image from ECR"
-            echo "Checking if image exists in ECR..."
-            aws ecr list-images --repository-name ${{ secrets.ECR_REPOSITORY_NAME }} --region ${{ secrets.AWS_REGION }}
+          # Install Trivy
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+          
+          # Scan the built image
+          trivy image --exit-code 1 --severity HIGH,CRITICAL ${{ steps.build.outputs.tags }} || echo "⚠️ Vulnerabilities found but continuing..."
+
+  # ==============================================================================
+  # CONTINUOUS DEPLOYMENT
+  # ==============================================================================
+  deploy:
+    name: 🚀 Deploy Application
+    runs-on: self-hosted
+    needs: [ci, build]
+    if: success() && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    
+    environment:
+      name: production
+      url: http://localhost:8000
+      
+    steps:
+      - name: 🧹 Pre-deployment Cleanup
+        run: |
+          # Clean Git config
+          git config --global --unset-all safe.directory 2>/dev/null || true
+          git config --local --unset-all core.sshCommand 2>/dev/null || true
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          
+          # Clean Docker resources
+          docker system prune -f --volumes
+          
+          echo "✅ Pre-deployment cleanup completed"
+        continue-on-error: true
+
+      - name: 💻 Verify System Requirements
+        run: |
+          echo "🔍 System Check:"
+          echo "OS: $(uname -a)"
+          echo "Docker: $(docker --version)"
+          echo "AWS CLI: $(aws --version)"
+          echo "Available Memory: $(free -h | grep '^Mem' | awk '{print $7}')"
+          echo "Available Disk: $(df -h . | tail -1 | awk '{print $4}')"
+          
+          # Check if we have enough resources
+          available_memory=$(free -m | grep '^Mem' | awk '{print $7}')
+          if (( available_memory < 512 )); then
+            echo "⚠️ Low memory warning: ${available_memory}MB available"
+          fi
+
+      - name: ☁️ Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔑 Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 📥 Pull Latest Image
+        run: |
+          image_uri="${{ needs.build.outputs.image-uri }}"
+          echo "📥 Pulling image: $image_uri"
+          
+          if ! docker pull "$image_uri"; then
+            echo "❌ Failed to pull image"
+            echo "Available images in ECR:"
+            aws ecr list-images --repository-name ${{ env.ECR_REPOSITORY }} --max-items 5
             exit 1
-          }
+          fi
+          
           echo "✅ Image pulled successfully"
-          
-      - name: Stop and remove existing container
+          docker tag "$image_uri" "${{ env.CONTAINER_NAME }}:latest"
+
+      - name: 🛑 Graceful Container Shutdown
         run: |
-          echo "Checking for existing container..."
-          if [ "$(docker ps -q -f name=networksecurity)" ]; then
-            echo "Stopping existing container..."
-            docker stop networksecurity || echo "Failed to stop container"
-            docker rm networksecurity || echo "Failed to remove container"
-            echo "✅ Existing container removed"
+          if container_id=$(docker ps -q -f name=${{ env.CONTAINER_NAME }}); then
+            echo "🛑 Gracefully stopping existing container..."
+            docker stop --time=30 "$container_id"
+            docker rm "$container_id"
+            echo "✅ Container stopped and removed"
           else
-            echo "No existing container found"
+            echo "ℹ️ No running container found"
           fi
           
-          # Also check for stopped containers
-          if [ "$(docker ps -aq -f name=networksecurity)" ]; then
-            echo "Removing stopped container..."
-            docker rm networksecurity || echo "Failed to remove stopped container"
-          fi
+          # Clean up any stopped containers
+          docker container prune -f
         continue-on-error: true
-        
-      - name: Verify port availability
+
+      - name: 🔌 Check Port Availability
         run: |
-          echo "Checking if port 8000 is available..."
-          if netstat -tuln | grep :8000; then
-            echo "⚠️ Port 8000 is already in use:"
-            netstat -tuln | grep :8000
-            echo "Attempting to find and kill processes using port 8000..."
-            sudo lsof -ti:8000 | xargs -r sudo kill -9 || echo "No processes found on port 8000"
-          else
-            echo "✅ Port 8000 is available"
+          if lsof -Pi :${{ env.APP_PORT }} -sTCP:LISTEN -t >/dev/null; then
+            echo "⚠️ Port ${{ env.APP_PORT }} is in use, attempting cleanup..."
+            sudo lsof -ti:${{ env.APP_PORT }} | xargs -r sudo kill -9
+            sleep 5
+            
+            if lsof -Pi :${{ env.APP_PORT }} -sTCP:LISTEN -t >/dev/null; then
+              echo "❌ Unable to free port ${{ env.APP_PORT }}"
+              exit 1
+            fi
           fi
-        continue-on-error: true
-        
-      - name: Run Docker Image to serve users
+          echo "✅ Port ${{ env.APP_PORT }} is available"
+
+      - name: 🚀 Deploy New Container
         run: |
-          echo "Starting new container..."
-          docker run -d \
-            -p 8000:8000 \
-            --ipc="host" \
-            --name=networksecurity \
+          echo "🚀 Starting new container..."
+          
+          container_id=$(docker run -d \
+            --name=${{ env.CONTAINER_NAME }} \
             --restart=unless-stopped \
+            --memory=1g \
+            --cpus=1.0 \
+            --health-cmd="curl -f http://localhost:${{ env.APP_PORT }}/health || exit 1" \
+            --health-interval=30s \
+            --health-timeout=10s \
+            --health-retries=3 \
+            --health-start-period=40s \
+            -p ${{ env.APP_PORT }}:${{ env.APP_PORT }} \
             -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
             -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            -e AWS_REGION="${{ secrets.AWS_REGION }}" \
+            -e AWS_REGION="${{ env.AWS_REGION }}" \
             -e MONGODB_URL_KEY="${{ secrets.MONGODB_URL_KEY }}" \
-            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest || {
-            echo "❌ Failed to start container"
-            echo "Docker logs:"
-            docker logs networksecurity 2>/dev/null || echo "No logs available"
-            exit 1
-          }
-          echo "✅ Container started successfully"
+            -e ENVIRONMENT=production \
+            -e PORT=${{ env.APP_PORT }} \
+            "${{ env.CONTAINER_NAME }}:latest")
+          
+          echo "✅ Container started: $container_id"
+          echo "CONTAINER_ID=$container_id" >> $GITHUB_ENV
+
+      - name: ⏳ Health Check
+        run: |
+          echo "⏳ Waiting for application to be ready..."
+          max_attempts=20
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt/$max_attempts..."
             
-      - name: Verify container is running
+            # Check if container is still running
+            if ! docker ps -q -f id=${{ env.CONTAINER_ID }} | grep -q .; then
+              echo "❌ Container stopped unexpectedly"
+              docker logs ${{ env.CONTAINER_ID }} --tail 50
+              exit 1
+            fi
+            
+            # Check health endpoint
+            if curl -f -s http://localhost:${{ env.APP_PORT }}/docs >/dev/null 2>&1; then
+              echo "✅ Application is healthy and responding"
+              break
+            fi
+            
+            if [ $attempt -eq $max_attempts ]; then
+              echo "❌ Health check failed after $max_attempts attempts"
+              echo "Container logs:"
+              docker logs ${{ env.CONTAINER_ID }} --tail 50
+              exit 1
+            fi
+            
+            sleep 15
+            ((attempt++))
+          done
+
+      - name: 📊 Deployment Summary
+        if: always()
         run: |
-          echo "Waiting for container to initialize..."
-          sleep 15
+          echo "📊 Deployment Summary:"
+          echo "Image: ${{ needs.build.outputs.image-uri }}"
+          echo "Digest: ${{ needs.build.outputs.image-digest }}"
+          echo "Container: ${{ env.CONTAINER_ID }}"
+          echo "Port: ${{ env.APP_PORT }}"
+          echo "Health: $(curl -s -o /dev/null -w '%{http_code}' http://localhost:${{ env.APP_PORT }}/docs || echo 'FAILED')"
           
-          echo "Checking container status..."
-          if [ "$(docker ps -q -f name=networksecurity)" ]; then
-            echo "✅ Container is running successfully"
-            echo ""
-            echo "Container details:"
-            docker ps -f name=networksecurity --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-            echo ""
-            echo "Container logs (last 20 lines):"
-            docker logs --tail 20 networksecurity
-            echo ""
-            echo "Testing application endpoint..."
-            curl -f http://localhost:8000/docs || echo "⚠️ Application not responding yet"
+          if docker ps -f name=${{ env.CONTAINER_NAME }} --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -q ${{ env.CONTAINER_NAME }}; then
+            echo "Status: ✅ RUNNING"
           else
-            echo "❌ Container failed to start or stopped unexpectedly"
-            echo ""
-            echo "Container logs:"
-            docker logs networksecurity || echo "No logs available"
-            echo ""
-            echo "All containers:"
-            docker ps -a
-            exit 1
+            echo "Status: ❌ FAILED"
           fi
-          
-      - name: Clean previous images and containers
+
+      - name: 🧹 Post-deployment Cleanup
+        if: always()
         run: |
-          echo "Cleaning up old Docker resources..."
-          docker system prune -f
+          # Remove old images (keep last 3)
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedAt}}" | \
+          grep ${{ env.CONTAINER_NAME }} | tail -n +4 | awk '{print $3}' | \
+          xargs -r docker rmi -f 2>/dev/null || true
+          
+          # Clean Git config
+          git config --global --unset-all safe.directory 2>/dev/null || true
+          git config --local --unset-all core.sshCommand 2>/dev/null || true
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          
           echo "✅ Cleanup completed"
-          
-      - name: Post-deployment Git cleanup
-        run: |
-          echo "Cleaning up Git configuration..."
-          git config --global --unset-all safe.directory || true
-          git config --local --unset-all core.sshCommand || true
-          git config --local --unset-all http.https://github.com/.extraheader || true
         continue-on-error: true
+
+  # ==============================================================================
+  # NOTIFICATION
+  # ==============================================================================
+  notify:
+    name: 📢 Notify Results
+    runs-on: ubuntu-latest
+    needs: [ci, build, deploy]
+    if: always()
+    
+    steps:
+      - name: 📢 Deployment Notification
+        if: always()
+        run: |
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "✅ Deployment completed successfully"
+            echo "🔗 Application URL: http://localhost:${{ env.APP_PORT }}"
+          else
+            echo "❌ Deployment failed"
+            echo "CI Status: ${{ needs.ci.result }}"
+            echo "Build Status: ${{ needs.build.result }}"
+            echo "Deploy Status: ${{ needs.deploy.result }}"
+          fi
