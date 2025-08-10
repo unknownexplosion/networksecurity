@@ -37,13 +37,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Free space BEFORE build on GitHub-hosted runner
+      - name: Quick sanity checks
+        run: |
+          set -euxo pipefail
+          echo "Docker:" && docker --version
+          echo "Git:" && git --version
+
       - name: Free disk space (before build)
         run: |
-          echo "Disk space before cleanup:" && df -h
+          df -h
           docker system prune -af || true
           sudo apt-get clean
-          echo "Disk space after cleanup:" && df -h
+          df -h
 
       - name: Install Utilities
         run: |
@@ -55,69 +60,51 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Who am I on AWS?
+        run: |
+          set -euxo pipefail
+          aws --version
+          aws sts get-caller-identity
+
+      - name: Ensure ECR repository exists
+        id: ensure-repo
+        env:
+          REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          set -euxo pipefail
+          if ! aws ecr describe-repositories --repository-names "$REPO" >/dev/null 2>&1; then
+            aws ecr create-repository --repository-name "$REPO" >/dev/null
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Validate required env
+        env:
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          set -euo pipefail
+          test -n "${ECR_REPOSITORY}" || (echo "ECR_REPOSITORY_NAME secret is empty"; exit 2)
 
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: latest
         run: |
-          set -e
-          echo "Building Docker image..."
-          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:${IMAGE_TAG}" .
-          echo "Pushing Docker image..."
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:${IMAGE_TAG}"
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          set -euxo pipefail
+          echo "Using registry: $ECR_REGISTRY"
+          echo "Using repo:     $ECR_REPOSITORY"
+          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Free disk space (after build)
-        run: |
-          docker system prune -af --volumes || true
-
-  Continuous-Deployment:
-    name: Continuous Deployment (self-hosted)
-    needs: build-and-push-ecr-image
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Pull latest image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:${IMAGE_TAG}"
-
-      - name: Run Docker container (replace if exists)
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          CONTAINER_NAME: networksecurity
-        run: |
-          # Stop & remove existing container if present
-          docker rm -f "$CONTAINER_NAME" || true
-          # Run fresh container
-          docker run -d -p 8080:8080 --ipc="host" --name "$CONTAINER_NAME" \
-            -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-            -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            -e AWS_REGION="${{ env.AWS_REGION }}" \
-            "$ECR_REGISTRY/$ECR_REPOSITORY:${IMAGE_TAG}"
-
-      - name: Cleanup dangling images
-        run: docker image prune -f || true
+        run: docker system prune -af --volumes || true
