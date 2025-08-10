@@ -1,12 +1,10 @@
 name: workflow
-
 on:
   push:
     branches:
       - main
     paths-ignore:
       - 'README.md'
-
 jobs:
   integration:
     name: Continuous Integration
@@ -14,37 +12,35 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Lint code
         run: echo "Linting repository"
-      
       - name: Run unit tests
         run: echo "Running unit tests"
-
+        
   build-and-push-ecr-image:
     name: Continuous Delivery
     needs: integration
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
+        
       - name: Install Utilities
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
-
+          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-        
+          
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
+        
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         env:
@@ -52,10 +48,11 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
+          # Build a docker container and push it to ECR
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-
+          
   continuous-deployment:
     name: Continuous Deployment
     needs: build-and-push-ecr-image
@@ -63,34 +60,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+        
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-
+          
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Pull latest image
+        
+      - name: Pull latest images
         run: |
           docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-
-      # Optional: Stop & remove old container
-      - name: Stop and remove old container
+          
+      - name: Stop and remove existing container
         run: |
-          docker ps -q --filter "name=networksecurity" | grep -q . && docker stop networksecurity && docker rm -fv networksecurity || true
-
+          if [ $(docker ps -q -f name=networksecurity) ]; then
+            echo "Stopping existing container..."
+            docker stop networksecurity
+            docker rm networksecurity
+          else
+            echo "No existing container found"
+          fi
+        continue-on-error: true
+        
       - name: Run Docker Image to serve users
         run: |
-          docker run -d -p 8080:8080 --ipc="host" --name networksecurity \
-            -e AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            -e AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            -e AWS_REGION=${{ secrets.AWS_REGION }} \
+          docker run -d -p 8080:8080 \
+            --ipc="host" \
+            --name=networksecurity \
+            -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -e AWS_REGION="${{ secrets.AWS_REGION }}" \
             ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
-
-      - name: Clean unused Docker resources
-        run: docker system prune -af
+            
+      - name: Verify container is running
+        run: |
+          sleep 10
+          if [ $(docker ps -q -f name=networksecurity) ]; then
+            echo "Container is running successfully"
+            docker ps -f name=networksecurity
+          else
+            echo "Container failed to start"
+            docker logs networksecurity
+            exit 1
+          fi
+          
+      - name: Clean previous images and containers
+        run: |
+          docker system prune -f
