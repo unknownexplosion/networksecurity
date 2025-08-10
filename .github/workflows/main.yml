@@ -58,58 +58,56 @@ jobs:
           # Only needed if another job/step consumes it:
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
-continuous-development:
-  name: Continuous Development
-  needs: build-and-push-ecr-image
-  runs-on: self-hosted
+  continuous-development:
+    name: Continuous Development
+    needs: build-and-push-ecr-image
+    runs-on: self-hosted
 
-  steps:
-  - name: Checkout code
-    uses: actions/checkout@v4
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-  - name: Configure AWS credentials
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ secrets.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
 
-  - name: Login to Amazon ECR
-    id: login-ecr
-    uses: aws-actions/amazon-ecr-login@v2
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
 
-  - name: Pull latest image
-    env:
-      REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-      REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
-    run: |
-      set -euo pipefail
-      docker pull "$REGISTRY/$REPO:latest"
+    - name: Pull latest image
+      env:
+        REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
+      run: |
+        set -euo pipefail
+        docker pull "$REGISTRY/$REPO:latest"
 
-  - name: Stop & remove previous container if exists
-    run: |
-      set -euo pipefail
-      if [ "$(docker ps -aq -f name=^/mltest$)" ]; then
-        docker rm -f mltest || true
-      fi
+    - name: Stop & remove previous container if exists
+      run: |
+        docker stop mltest || true
+        docker rm mltest || true
 
-  - name: Run Docker image to serve users
-    env:
-      REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-      REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-    run: |
-      set -euo pipefail
-      docker run -d --restart unless-stopped \
-        --name mltest --ipc=host -p 8080:8080 \
-        -e AWS_ACCESS_KEY_ID \
-        -e AWS_SECRET_ACCESS_KEY \
-        -e AWS_REGION \
-        "$REGISTRY/$REPO:latest"
+    - name: Run Docker image to serve users
+      env:
+        REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+      run: |
+        set -euo pipefail
+        docker run -d --restart unless-stopped \
+          --name mltest --ipc=host -p 8080:8080 \
+          -e AWS_ACCESS_KEY_ID \
+          -e AWS_SECRET_ACCESS_KEY \
+          -e AWS_REGION \
+          "$REGISTRY/$REPO:latest"
 
-  - name: Clean previous images and containers
-    run: |
-      set -euo pipefail
-      docker system prune -f  
+    - name: Clean previous images and containers
+      run: |
+        set -euo pipefail
+        docker system prune -f
