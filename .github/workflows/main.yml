@@ -1,157 +1,142 @@
-name: Workflows
+name: workflow
 
 on:
   push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Lint code
         run: echo "Linting repository"
 
       - name: Run unit tests
-        run: echo "Running tests"
+        run: echo "Running unit tests"
 
   build-and-push-ecr-image:
-    name: Continuous Delivery (Build & Push)
+    name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
-    outputs:
-      image_uri: ${{ steps.publish.outputs.image_uri }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install Utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq unzip
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Preflight
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+  
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
         env:
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          set -euo pipefail
-          aws sts get-caller-identity
-          test -n "$ECR_REPOSITORY" || { echo "ECR_REPOSITORY_NAME missing"; exit 1; }
-
-      - name: Ensure ECR repository exists
-        env:
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
-          aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
-
-      - name: Build image
-        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
-          docker build --progress=plain -t "$ECR_REPOSITORY:$IMAGE_TAG" .
+          echo "Building and pushing Docker image..."
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-      - name: Tag & push image
-        id: publish
-        env:
-          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
+      - name: Free up disk space after build
         run: |
-          set -euo pipefail
-          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker tag "$ECR_REPOSITORY:$IMAGE_TAG" "$IMAGE_URI"
-          docker push "$IMAGE_URI"
-          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "Cleaning up after build to free up space..."
+          docker system prune -af --volumes
 
-  deploy-ecs:
-    name: Deploy to ECS
+      - name: Free Disk Space Before Build
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+
+  Continuous-Deployment:
     needs: build-and-push-ecr-image
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Checkout repo (for taskdef.json)
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Render task definition with new image
-        id: render
-        env:
-          IMAGE_URI: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
-          ECS_CONTAINER_NAME: ${{ secrets.ECS_CONTAINER_NAME }}
+      - name: Free Disk Space Before Build
         run: |
-          set -euo pipefail
-          test -f taskdef.json || { echo "taskdef.json not found at repo root"; exit 1; }
-          cat taskdef.json \
-          | jq --arg IMG "$IMAGE_URI" --arg NAME "$ECS_CONTAINER_NAME" '
-              .containerDefinitions |= map(
-                if .name == $NAME then .image = $IMG else . end
-              )' \
-          > taskdef.rendered.json
-          echo "rendered_taskdef=taskdef.rendered.json" >> "$GITHUB_OUTPUT"
+          echo "Disk space before cleanup:"
+          df -h
+          docker system prune -af
+          sudo apt-get clean
+          sudo rm -rf /tmp/*
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf $AGENT_TOOLSDIRECTORY
+          sudo apt-get remove -y firefox llvm* 
+          sudo rm -rf /usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android/sdk/ndk
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
 
-      - name: Register new task definition
-        id: register
-        env:
-          TASK_FAMILY: ${{ secrets.ECS_TASK_FAMILY }}
+      - name: Free up space by deleting node_modules
+        run: rm -rf node_modules
+      
+      - name: Pull latest images
         run: |
-          ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://taskdef.rendered.json \
-            --query taskDefinition.taskDefinitionArn --output text)
-          echo "taskdef_arn=$ARN" >> "$GITHUB_OUTPUT"
+          echo "Pulling the latest Docker image..."
+          docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
 
-      - name: Update ECS service
-        env:
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-          TASKDEF_ARN: ${{ steps.register.outputs.taskdef_arn }}
+      - name: Run Docker Image to serve users
         run: |
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --task-definition "$TASKDEF_ARN" \
-            --force-new-deployment >/dev/null
-          echo "Triggered ECS deployment with $TASKDEF_ARN"
+          echo "Running the latest Docker container..."
+          docker run -d -p 8080:8080 --ipc="host" --name=networksecurity \
+            -e 'AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}' \
+            -e 'AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
+            -e 'AWS_REGION=${{ secrets.AWS_REGION }}' \
+            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
 
-      - name: Summary
+      - name: Clean previous images and containers
         run: |
-          {
-            echo "## 🚀 ECS deployment triggered"
-            echo "- Cluster: \`${{ secrets.ECS_CLUSTER }}\`"
-            echo "- Service: \`${{ secrets.ECS_SERVICE }}\`"
-            echo "- Image:   \`${{ needs.build-and-push-ecr-image.outputs.image_uri }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Cleaning up unused Docker resources..."
+          docker system prune -af --volumes
