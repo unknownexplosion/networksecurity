@@ -2,8 +2,15 @@ python-dotenv
 pandas
 numpy
 pymongo
-certifi # pymongo needs this
+certifi
+pymongo[srv]
 scikit-learn
-dill
+mlflow
 pyaml
-## -e .
+dagshub
+fastapi
+uvicorn
+python-multipart
+
+
+##-e .

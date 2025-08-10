@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/anubhavmukherjee/Desktop/networksecurity/mlruns/0/caf4f60215344222a76baccaa636b12f/artifacts
+end_time: 1754844205935
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: caf4f60215344222a76baccaa636b12f
+run_name: orderly-skunk-628
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1754844203943
+status: 3
+tags: []
+user_id: unknownexplosion

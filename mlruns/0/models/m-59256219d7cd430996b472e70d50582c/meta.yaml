@@ -1,0 +1,10 @@
+artifact_location: file:///Users/anubhavmukherjee/Desktop/networksecurity/mlruns/0/models/m-59256219d7cd430996b472e70d50582c/artifacts
+creation_timestamp: 1754844204141
+experiment_id: '0'
+last_updated_timestamp: 1754844205931
+model_id: m-59256219d7cd430996b472e70d50582c
+model_type: null
+name: model
+source_run_id: caf4f60215344222a76baccaa636b12f
+status: 2
+status_message: null

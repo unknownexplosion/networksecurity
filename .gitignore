@@ -1,2 +1,20 @@
-venv
+# Environment
 .env
+.env.local
+venv/
+.venv/
+networksec_env/
+networksec_env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+artifacts/
+final_model/
+
+# macOS
+.DS_Store

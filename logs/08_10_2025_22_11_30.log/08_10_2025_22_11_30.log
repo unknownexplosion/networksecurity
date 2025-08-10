@@ -1,0 +1,25 @@
+[ 2025-08-10 22:11:49,701 ] 42 root - INFO - Start data Ingestion
+[ 2025-08-10 22:11:54,627 ] 62 root - INFO - Performed train test split on the dataframe
+[ 2025-08-10 22:11:54,627 ] 64 root - INFO - Exited split_data_as_train_test method of Data_Ingestion class
+[ 2025-08-10 22:11:54,627 ] 72 root - INFO - Exporting train and test file path.
+[ 2025-08-10 22:11:54,653 ] 81 root - INFO - Exported train and test file path.
+[ 2025-08-10 22:11:54,653 ] 45 root - INFO - Data Ingestion completed and artifact: DataIngestionArtifact(trained_file_path='Artifacts/08_10_2025_22_11_30/data_ingestion/ingested/train.csv', test_file_path='Artifacts/08_10_2025_22_11_30/data_ingestion/ingested/test.csv')
+[ 2025-08-10 22:11:54,656 ] 55 root - INFO - Initiate the data Validation
+[ 2025-08-10 22:11:54,663 ] 32 root - INFO - Required number of columns:2
+[ 2025-08-10 22:11:54,663 ] 33 root - INFO - Data frame has columns:31
+[ 2025-08-10 22:11:54,663 ] 32 root - INFO - Required number of columns:2
+[ 2025-08-10 22:11:54,663 ] 33 root - INFO - Data frame has columns:31
+[ 2025-08-10 22:11:54,729 ] 66 root - INFO - Entered initiate_data_transformation method of DataTransformation class
+[ 2025-08-10 22:11:54,729 ] 68 root - INFO - Starting data transformation
+[ 2025-08-10 22:11:54,736 ] 50 root - INFO - Entered get_data_transformer_object method of Transformation class
+[ 2025-08-10 22:11:54,736 ] 56 root - INFO - Initialise KNNImputer with {'missing_values': nan, 'n_neighbors': 3, 'weights': 'uniform'}
+[ 2025-08-10 22:11:54,740 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-08-10 22:11:54,742 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-08-10 22:11:54,742 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-08-10 22:11:54,743 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-08-10 22:13:23,947 ] 108 root - INFO - Starting MLflow run for model: Random Forest
+[ 2025-08-10 22:13:24,136 ] 131 root - INFO - Logged preprocessor artifact from: Artifacts/08_10_2025_22_11_30/data_transformation/transformed_object/preprocessing.pkl
+[ 2025-08-10 22:13:25,934 ] 143 root - INFO - Logged model: Random Forest
+[ 2025-08-10 22:13:25,935 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-08-10 22:13:25,948 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-08-10 22:13:25,949 ] 157 root - INFO - Model trainer artifact: ModelTrainerArtifact(trained_model_file_path='Artifacts/08_10_2025_22_11_30/model_trainer/trained_model/model.pkl', train_metric_artifact=ClassificationMetricArtifact(f1_score=0.9911129064835387, precision_score=0.9889157597742846, recall_score=0.9933198380566801), test_metric_artifact=ClassificationMetricArtifact(f1_score=0.9803921568627451, precision_score=0.974817221770918, recall_score=0.9860312243221035))

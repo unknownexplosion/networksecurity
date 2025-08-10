@@ -1,9 +1,11 @@
 import sys
-import os
 import numpy as np
 import pandas as pd
 from sklearn.impute import KNNImputer
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+import warnings
+warnings.filterwarnings('ignore')
 
 from networksecurity.constant.training_pipeline import TARGET_COLUMN
 from networksecurity.constant.training_pipeline import DATA_TRANSFORMATION_IMPUTER_PARAMS
@@ -34,7 +36,7 @@ class DataTransformation:
         except Exception as e:
             raise NetworkSecurityException(e, sys)
         
-    def get_data_transformer_object(cls)->Pipeline:
+    def get_data_transformer_object(self)->Pipeline:
         """
         It initialises a KNNImputer object with the parameters specified in the training_pipeline.py file
         and returns a Pipeline object with the KNNImputer object as the first step.
@@ -46,14 +48,15 @@ class DataTransformation:
           A Pipeline object
         """
         logging.info(
-            "Entered get_data_trnasformer_object method of Trnasformation class"
+            "Entered get_data_transformer_object method of Transformation class"
         )
         try:
            imputer:KNNImputer=KNNImputer(**DATA_TRANSFORMATION_IMPUTER_PARAMS)
+           scaler:StandardScaler=StandardScaler()
            logging.info(
                 f"Initialise KNNImputer with {DATA_TRANSFORMATION_IMPUTER_PARAMS}"
             )
-           processor:Pipeline=Pipeline([("imputer",imputer)])
+           processor:Pipeline=Pipeline([("imputer",imputer),("scaler",scaler)])
            return processor
         except Exception as e:
             raise NetworkSecurityException(e,sys)

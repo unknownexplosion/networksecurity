@@ -11,7 +11,7 @@ from sklearn.model_selection import GridSearchCV
 
 def read_yaml_file(file_path: str) -> dict:
     try:
-        with open(file_path, "rb") as yaml_file:
+        with open(file_path, "r") as yaml_file:
             return yaml.safe_load(yaml_file)
     except Exception as e:
         raise NetworkSecurityException(e, sys) from e
@@ -95,9 +95,10 @@ def evaluate_models(X_train, y_train,X_test,y_test,models,param):
 
             y_test_pred = model.predict(X_test)
 
-            train_model_score = r2_score(y_train, y_train_pred)
+            from sklearn.metrics import accuracy_score
+            train_model_score = accuracy_score(y_train, y_train_pred)
 
-            test_model_score = r2_score(y_test, y_test_pred)
+            test_model_score = accuracy_score(y_test, y_test_pred)
 
             report[list(models.keys())[i]] = test_model_score
 

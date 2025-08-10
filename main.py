@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv() # Load environment variables from .env file
+
 from networksecurity.components.data_ingestion import DataIngestion
 from networksecurity.components.data_validation import DataValidation
 from networksecurity.components.data_transformation import DataTransformation
@@ -44,4 +47,4 @@ if __name__=='__main__':
         
         
     except Exception as e:
-           raise NetworkSecurityException(e,sys)
+        raise NetworkSecurityException(e,sys)
