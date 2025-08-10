@@ -6,17 +6,20 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -35,7 +38,8 @@ jobs:
     name: Continuous Delivery (Build & Push)
     needs: integration
     runs-on: ubuntu-latest
-
+    outputs:
+      image_uri: ${{ steps.publish.outputs.image_uri }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -51,23 +55,47 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to ECR
+      - name: Preflight
+        env:
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity
+          test -n "$ECR_REPOSITORY" || { echo "ECR_REPOSITORY_NAME missing"; exit 1; }
+
+      - name: Ensure ECR repository exists
+        env:
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
+
+      - name: Build image
+        env:
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAG: latest
+        run: |
+          docker build --progress=plain -t "$ECR_REPOSITORY:$IMAGE_TAG" .
+
+      - name: Tag & push image
+        id: publish
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
-          docker build -t "$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker tag "$ECR_REPOSITORY:$IMAGE_TAG" "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          set -euo pipefail
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker tag "$ECR_REPOSITORY:$IMAGE_TAG" "$IMAGE_URI"
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-  continuous-deployment:
-    name: Continuous Deployment (Run Container)
+  deploy-ecs:
+    name: Deploy to ECS
     needs: build-and-push-ecr-image
-    runs-on: self-hosted
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout repo (for taskdef.json)
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -77,41 +105,53 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Pull latest Docker image
+      - name: Render task definition with new image
+        id: render
         env:
-          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
+          IMAGE_URI: ${{ needs.build-and-push-ecr-image.outputs.image_uri }}
+          ECS_CONTAINER_NAME: ${{ secrets.ECS_CONTAINER_NAME }}
         run: |
-          docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          set -euo pipefail
+          test -f taskdef.json || { echo "taskdef.json not found at repo root"; exit 1; }
+          cat taskdef.json \
+          | jq --arg IMG "$IMAGE_URI" --arg NAME "$ECS_CONTAINER_NAME" '
+              .containerDefinitions |= map(
+                if .name == $NAME then .image = $IMG else . end
+              )' \
+          > taskdef.rendered.json
+          echo "rendered_taskdef=taskdef.rendered.json" >> "$GITHUB_OUTPUT"
 
-      - name: Run docker image to serve users
+      - name: Register new task definition
+        id: register
         env:
-          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          TASK_FAMILY: ${{ secrets.ECS_TASK_FAMILY }}
         run: |
-          # Stop & remove existing container if present
-          if [ "$(docker ps -aq -f name=mltest)" ]; then
-            docker rm -f mltest || true
-          fi
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef.rendered.json \
+            --query taskDefinition.taskDefinitionArn --output text)
+          echo "taskdef_arn=$ARN" >> "$GITHUB_OUTPUT"
 
-          docker run -d \
-            --name mltest \
-            --ipc=host \
-            -p 8080:8080 \
-            -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-            -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-            -e AWS_REGION="$AWS_REGION" \
-            "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-
-      - name: Clean previous images and containers
+      - name: Update ECS service
+        env:
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+          TASKDEF_ARN: ${{ steps.register.outputs.taskdef_arn }}
         run: |
-          docker system prune -f
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASKDEF_ARN" \
+            --force-new-deployment >/dev/null
+          echo "Triggered ECS deployment with $TASKDEF_ARN"
+
+      - name: Summary
+        run: |
+          {
+            echo "## 🚀 ECS deployment triggered"
+            echo "- Cluster: \`${{ secrets.ECS_CLUSTER }}\`"
+            echo "- Service: \`${{ secrets.ECS_SERVICE }}\`"
+            echo "- Image:   \`${{ needs.build-and-push-ecr-image.outputs.image_uri }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
