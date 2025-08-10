@@ -37,10 +37,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
           
+      - name: Verify AWS Configuration
+        run: |
+          echo "AWS Region: ${{ secrets.AWS_REGION }}"
+          echo "ECR Repository: ${{ secrets.ECR_REPOSITORY_NAME }}"
+          aws sts get-caller-identity
+          
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         
+      - name: Verify Dockerfile exists
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "ERROR: Dockerfile not found in repository root"
+            ls -la
+            exit 1
+          fi
+          echo "Dockerfile found"
+          
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         env:
@@ -48,9 +63,26 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAG: latest
         run: |
-          # Build a docker container and push it to ECR
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "Building Docker image..."
+          echo "Registry: $ECR_REGISTRY"
+          echo "Repository: $ECR_REPOSITORY" 
+          echo "Tag: $IMAGE_TAG"
+          
+          # Build the Docker image
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG . || {
+            echo "Docker build failed"
+            exit 1
+          }
+          
+          echo "Docker build successful, pushing to ECR..."
+          
+          # Push the image to ECR
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG || {
+            echo "Docker push failed"
+            exit 1
+          }
+          
+          echo "Docker push successful"
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
           
   continuous-deployment:
