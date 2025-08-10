@@ -88,10 +88,8 @@ jobs:
 
     - name: Stop & remove previous container if exists
       run: |
-        set -euo pipefail
-        if [ "$(docker ps -aq -f name=^/mltest$)" ]; then
-          docker rm -f mltest || true
-        fi
+        docker stop mltest || true
+        docker rm mltest || true
 
     - name: Run Docker image to serve users
       env:
