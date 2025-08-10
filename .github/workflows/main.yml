@@ -163,6 +163,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         
+      - name: Verify self-hosted runner environment
+        run: |
+          echo "=== System Information ==="
+          uname -a
+          echo ""
+          echo "=== Docker Version ==="
+          docker --version || echo "Docker not installed"
+          echo ""
+          echo "=== AWS CLI Version ==="
+          aws --version || echo "AWS CLI not installed"
+          echo ""
+          echo "=== Available Disk Space ==="
+          df -h
+          echo ""
+          echo "=== Current Docker Images ==="
+          docker images || echo "Cannot list Docker images"
+          echo ""
+          echo "=== Current Docker Containers ==="
+          docker ps -a || echo "Cannot list Docker containers"
+        
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -170,48 +190,122 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
           
+      - name: Verify AWS credentials
+        run: |
+          echo "Testing AWS credentials..."
+          aws sts get-caller-identity || {
+            echo "❌ AWS credentials verification failed"
+            exit 1
+          }
+          echo "✅ AWS credentials working"
+          
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         
+      - name: Verify ECR login
+        run: |
+          echo "ECR Registry: ${{ steps.login-ecr.outputs.registry }}"
+          echo "Testing ECR access..."
+          aws ecr describe-repositories --repository-names ${{ secrets.ECR_REPOSITORY_NAME }} || {
+            echo "❌ Cannot access ECR repository"
+            exit 1
+          }
+          echo "✅ ECR access verified"
+          
       - name: Pull latest images
         run: |
-          docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+          echo "Pulling image: ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest"
+          docker pull ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest || {
+            echo "❌ Failed to pull image from ECR"
+            echo "Checking if image exists in ECR..."
+            aws ecr list-images --repository-name ${{ secrets.ECR_REPOSITORY_NAME }} --region ${{ secrets.AWS_REGION }}
+            exit 1
+          }
+          echo "✅ Image pulled successfully"
           
       - name: Stop and remove existing container
         run: |
-          if [ $(docker ps -q -f name=networksecurity) ]; then
+          echo "Checking for existing container..."
+          if [ "$(docker ps -q -f name=networksecurity)" ]; then
             echo "Stopping existing container..."
-            docker stop networksecurity
-            docker rm networksecurity
+            docker stop networksecurity || echo "Failed to stop container"
+            docker rm networksecurity || echo "Failed to remove container"
+            echo "✅ Existing container removed"
           else
             echo "No existing container found"
+          fi
+          
+          # Also check for stopped containers
+          if [ "$(docker ps -aq -f name=networksecurity)" ]; then
+            echo "Removing stopped container..."
+            docker rm networksecurity || echo "Failed to remove stopped container"
+          fi
+        continue-on-error: true
+        
+      - name: Verify port availability
+        run: |
+          echo "Checking if port 8000 is available..."
+          if netstat -tuln | grep :8000; then
+            echo "⚠️ Port 8000 is already in use:"
+            netstat -tuln | grep :8000
+            echo "Attempting to find and kill processes using port 8000..."
+            sudo lsof -ti:8000 | xargs -r sudo kill -9 || echo "No processes found on port 8000"
+          else
+            echo "✅ Port 8000 is available"
           fi
         continue-on-error: true
         
       - name: Run Docker Image to serve users
         run: |
-          docker run -d -p 8000:8000 \
+          echo "Starting new container..."
+          docker run -d \
+            -p 8000:8000 \
             --ipc="host" \
             --name=networksecurity \
+            --restart=unless-stopped \
             -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
             -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
             -e AWS_REGION="${{ secrets.AWS_REGION }}" \
             -e MONGODB_URL_KEY="${{ secrets.MONGODB_URL_KEY }}" \
-            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest
+            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ secrets.ECR_REPOSITORY_NAME }}:latest || {
+            echo "❌ Failed to start container"
+            echo "Docker logs:"
+            docker logs networksecurity 2>/dev/null || echo "No logs available"
+            exit 1
+          }
+          echo "✅ Container started successfully"
             
       - name: Verify container is running
         run: |
-          sleep 10
-          if [ $(docker ps -q -f name=networksecurity) ]; then
-            echo "Container is running successfully"
-            docker ps -f name=networksecurity
+          echo "Waiting for container to initialize..."
+          sleep 15
+          
+          echo "Checking container status..."
+          if [ "$(docker ps -q -f name=networksecurity)" ]; then
+            echo "✅ Container is running successfully"
+            echo ""
+            echo "Container details:"
+            docker ps -f name=networksecurity --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            echo ""
+            echo "Container logs (last 20 lines):"
+            docker logs --tail 20 networksecurity
+            echo ""
+            echo "Testing application endpoint..."
+            curl -f http://localhost:8000/docs || echo "⚠️ Application not responding yet"
           else
-            echo "Container failed to start"
-            docker logs networksecurity
+            echo "❌ Container failed to start or stopped unexpectedly"
+            echo ""
+            echo "Container logs:"
+            docker logs networksecurity || echo "No logs available"
+            echo ""
+            echo "All containers:"
+            docker ps -a
             exit 1
           fi
           
       - name: Clean previous images and containers
         run: |
+          echo "Cleaning up old Docker resources..."
           docker system prune -f
+          echo "✅ Cleanup completed"
