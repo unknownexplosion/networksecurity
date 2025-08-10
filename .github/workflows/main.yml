@@ -7,149 +7,100 @@ on:
     paths:
       - "README.md"
 
-concurrency:
-  group: cd-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Lint code
-        run: echo "Linting repository"
-      - name: Run unit tests
-        run: echo "Running tests"
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Lint code
+      run: echo "Linting repository"
+    - name: Run unit tests
+      run: echo "Running tests"
 
   build-and-push-ecr-image:
     name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Install Utilities
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
+    - name: Install Utilities
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq unzip
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Verify AWS identity and ECR repo
-        shell: bash
-        env:
-          ECR_REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          set -euxo pipefail
-          aws sts get-caller-identity
-          aws ecr describe-repositories --repository-names "$ECR_REPO" || \
-          aws ecr create-repository --repository-name "$ECR_REPO"
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push image to Amazon ECR
-        id: build-image
-        shell: bash
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: latest
-        run: |
-          set -euxo pipefail
-          docker version
-          docker build --pull --no-cache -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+    - name: Build and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+        IMAGE_TAG: latest
+      run: |
+        docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
+        docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   continuous-development:
     name: Continuous Development
     needs: build-and-push-ecr-image
     runs-on: self-hosted
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Verify Docker on runner
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker version
-          docker info
+    - name: Pull latest image
+      env:
+        REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
+      run: |
+        docker pull "$REGISTRY/$REPO:latest"
 
-      - name: Pull latest image
-        shell: bash
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
-        run: |
-          set -euxo pipefail
-          aws sts get-caller-identity
-          aws ecr describe-images --repository-name "$REPO" --image-ids imageTag=latest || true
-          docker pull "$REGISTRY/$REPO:latest"
+    - name: Stop & remove previous container if exists
+      run: |
+        docker stop mltest || true
+        docker rm mltest || true
 
-      - name: Stop & remove previous container if exists
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker ps -a || true
-          docker stop mltest 2>/dev/null || true
-          docker rm mltest 2>/dev/null || true
+    - name: Run Docker image to serve users
+      env:
+        REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+      run: |
+        docker run -d --restart unless-stopped \
+          --name mltest --ipc=host -p 8080:8080 \
+          -e AWS_ACCESS_KEY_ID \
+          -e AWS_SECRET_ACCESS_KEY \
+          -e AWS_REGION \
+          "$REGISTRY/$REPO:latest"
 
-      - name: Run Docker image to serve users
-        shell: bash
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_NAME }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          set -euxo pipefail
-          docker run -d --restart unless-stopped \
-            --name mltest --ipc=host -p 8080:8080 \
-            -e AWS_ACCESS_KEY_ID \
-            -e AWS_SECRET_ACCESS_KEY \
-            -e AWS_REGION \
-            "$REGISTRY/$REPO:latest"
-          sleep 5
-          docker logs --tail=100 mltest || true
-
-      - name: Diagnostics on failure
-        if: failure()
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "=== Containers ==="
-          docker ps -a || true
-          echo "=== Images ==="
-          docker images || true
-          echo "=== mltest logs (last 300 lines) ==="
-          docker logs --tail=300 mltest || true
-
-      - name: Clean previous images and containers
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker system prune -af
+    - name: Clean previous images and containers
+      run: |
+        docker system prune -f
