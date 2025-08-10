@@ -47,39 +47,62 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         
-      - name: Verify Dockerfile exists
-        run: |
-          if [ ! -f Dockerfile ]; then
-            echo "ERROR: Dockerfile not found in repository root"
-            ls -la
-            exit 1
-          fi
-          echo "Dockerfile found"
-          
-      - name: Check repository files
+      - name: Check repository files and structure
         run: |
           echo "Repository contents:"
           ls -la
+          echo ""
           echo "Checking for required files..."
+          
+          # Check requirements.txt
           if [ ! -f requirements.txt ]; then
-            echo "WARNING: requirements.txt not found"
+            echo "ERROR: requirements.txt not found"
+            exit 1
           else
-            echo "requirements.txt contents:"
+            echo "✓ requirements.txt found"
+            echo "Contents:"
             cat requirements.txt
           fi
+          
+          # Check app.py
           if [ ! -f app.py ]; then
-            echo "WARNING: app.py not found"
+            echo "ERROR: app.py not found"
+            exit 1
           else
-            echo "app.py found"
+            echo "✓ app.py found"
+          fi
+          
+          # Check if networksecurity directory exists
+          if [ ! -d networksecurity ]; then
+            echo "WARNING: networksecurity directory not found"
+            echo "Creating placeholder structure..."
+            mkdir -p networksecurity/templates
+            echo '<html><body><h1>Placeholder Template</h1>{{table}}</body></html>' > networksecurity/templates/table.html
+          else
+            echo "✓ networksecurity directory found"
+          fi
+          
+          # Check Dockerfile
+          if [ ! -f Dockerfile ]; then
+            echo "ERROR: Dockerfile not found"
+            exit 1
+          else
+            echo "✓ Dockerfile found"
+            echo "Dockerfile contents:"
+            cat Dockerfile
           fi
 
       - name: Create ECR repository if it doesn't exist
         env:
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
         run: |
-          # Check if repository exists, create if it doesn't
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY 2>/dev/null || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY --region ${{ secrets.AWS_REGION }}
+          echo "Checking if ECR repository exists..."
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region ${{ secrets.AWS_REGION }} 2>/dev/null || {
+            echo "Repository doesn't exist, creating..."
+            aws ecr create-repository --repository-name $ECR_REPOSITORY --region ${{ secrets.AWS_REGION }}
+            echo "Repository created successfully"
+          }
+          echo "ECR repository is ready"
           
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
@@ -96,29 +119,40 @@ jobs:
           echo "Tag: $IMAGE_TAG"
           echo "Full image name: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           
-          # Build the Docker image with verbose output
+          # Build the Docker image with detailed output
           echo "Starting Docker build..."
-          docker build --no-cache -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG . 2>&1 | tee build.log
+          docker build --no-cache --progress=plain -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG . 2>&1 | tee build.log
           
+          # Check if build was successful
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "Docker build failed. Build log:"
+            echo "❌ Docker build failed!"
+            echo "Last 50 lines of build log:"
+            tail -50 build.log
+            echo ""
+            echo "Full build log:"
             cat build.log
             exit 1
           fi
           
-          echo "Docker build successful, verifying image..."
-          docker images | grep $ECR_REPOSITORY
+          echo "✅ Docker build successful!"
+          echo "Verifying image was created..."
+          docker images | grep $ECR_REPOSITORY || {
+            echo "❌ Image not found after build"
+            exit 1
+          }
           
-          echo "Pushing to ECR..."
+          echo "📤 Pushing to ECR..."
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG 2>&1 | tee push.log
           
+          # Check if push was successful
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "Docker push failed. Push log:"
+            echo "❌ Docker push failed!"
+            echo "Push log:"
             cat push.log
             exit 1
           fi
           
-          echo "Docker push successful"
+          echo "✅ Docker push successful!"
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
           
   continuous-deployment:

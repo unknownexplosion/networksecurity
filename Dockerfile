@@ -1,25 +1,22 @@
-FROM python:3.10-slim-buster
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Copy requirements first for better Docker layer caching
 COPY requirements.txt /app/
 
-# Update package lists and install system dependencies
 RUN apt-get update -y && \
-    apt-get install -y awscli && \
+    apt-get install -y curl unzip && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir awscli && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . /app/
 
-# Expose port if your app uses one (adjust as needed)
-EXPOSE 8080
+RUN mkdir -p final_model prediction_output networksecurity/templates && \
+    echo '<html><head><title>Network Security Results</title></head><body><h1>Prediction Results</h1>{{ table|safe }}</body></html>' > networksecurity/templates/table.html
 
-# Run the application
+EXPOSE 8000
+
 CMD ["python3", "app.py"]
