@@ -11,38 +11,37 @@ jobs:
   integration:
     name: Continuous Integration
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Lint code
         run: echo "Linting repository"
-    
       - name: Run unit tests
         run: echo "Running tests"
 
   build-and-push-ecr-image:
     name: Continuous Delivery
     needs: integration
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Install Utilities
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip
-        
-      - name: Configure AWS credentials
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      # (optional) build & push
+      - name: Build, tag, and push image
+        run: |
+          REPO="<your-ecr-repo-name>"
+          IMAGE_TAG="${GITHUB_SHA::7}"
+          docker build -t "$REPO:$IMAGE_TAG" .
+          docker tag "$REPO:$IMAGE_TAG" "${{ steps.login-ecr.outputs.registry }}/$REPO:$IMAGE_TAG"
+          docker push "${{ steps.login-ecr.outputs.registry }}/$REPO:$IMAGE_TAG"
