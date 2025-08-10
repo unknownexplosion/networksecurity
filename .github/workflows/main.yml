@@ -160,9 +160,21 @@ jobs:
     needs: build-and-push-ecr-image
     runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Pre-cleanup Git configuration
+        run: |
+          echo "Cleaning up any existing Git configuration issues..."
+          git config --global --unset-all safe.directory || true
+          git config --local --unset-all core.sshCommand || true
+          git config --local --unset-all http.https://github.com/.extraheader || true
+        continue-on-error: true
         
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          
       - name: Verify self-hosted runner environment
         run: |
           echo "=== System Information ==="
@@ -183,13 +195,6 @@ jobs:
           echo "=== Current Docker Containers ==="
           docker ps -a || echo "Cannot list Docker containers"
         
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-          
       - name: Verify AWS credentials
         run: |
           echo "Testing AWS credentials..."
@@ -309,3 +314,11 @@ jobs:
           echo "Cleaning up old Docker resources..."
           docker system prune -f
           echo "✅ Cleanup completed"
+          
+      - name: Post-deployment Git cleanup
+        run: |
+          echo "Cleaning up Git configuration..."
+          git config --global --unset-all safe.directory || true
+          git config --local --unset-all core.sshCommand || true
+          git config --local --unset-all http.https://github.com/.extraheader || true
+        continue-on-error: true
