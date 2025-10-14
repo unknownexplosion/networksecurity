@@ -1,7 +1,6 @@
 from networksecurity.exception.exception import NetworkSecurityException
 from networksecurity.logging.logger import logging
 
-
 ## configuration of the Data Ingestion Config
 
 from networksecurity.entity.config_entity import DataIngestionConfig
@@ -13,6 +12,8 @@ import pandas as pd
 import pymongo
 from typing import List
 from sklearn.model_selection import train_test_split
+from dotenv import load_dotenv
+load_dotenv()   
 
 MONGO_DB_URL=os.getenv("MONGO_DB_URL")
 

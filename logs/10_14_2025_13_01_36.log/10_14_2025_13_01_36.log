@@ -1,0 +1,30 @@
+[ 2025-10-14 13:01:38,478 ] 23 root - INFO - Initiate the data ingestion
+[ 2025-10-14 13:01:44,201 ] 63 root - INFO - Performed train test split on the dataframe
+[ 2025-10-14 13:01:44,201 ] 65 root - INFO - Exited split_data_as_train_test method of Data_Ingestion class
+[ 2025-10-14 13:01:44,201 ] 73 root - INFO - Exporting train and test file path.
+[ 2025-10-14 13:01:44,225 ] 82 root - INFO - Exported train and test file path.
+[ 2025-10-14 13:01:44,225 ] 25 root - INFO - Data Initiation Completed
+[ 2025-10-14 13:01:44,227 ] 29 root - INFO - Initiate the data Validation
+[ 2025-10-14 13:01:44,235 ] 32 root - INFO - Required number of columns:2
+[ 2025-10-14 13:01:44,235 ] 33 root - INFO - Data frame has columns:31
+[ 2025-10-14 13:01:44,235 ] 32 root - INFO - Required number of columns:2
+[ 2025-10-14 13:01:44,235 ] 33 root - INFO - Data frame has columns:31
+[ 2025-10-14 13:01:44,294 ] 31 root - INFO - data Validation Completed
+[ 2025-10-14 13:01:44,294 ] 34 root - INFO - data Transformation started
+[ 2025-10-14 13:01:44,294 ] 66 root - INFO - Entered initiate_data_transformation method of DataTransformation class
+[ 2025-10-14 13:01:44,294 ] 68 root - INFO - Starting data transformation
+[ 2025-10-14 13:01:44,301 ] 50 root - INFO - Entered get_data_transformer_object method of Transformation class
+[ 2025-10-14 13:01:44,301 ] 56 root - INFO - Initialise KNNImputer with {'missing_values': nan, 'n_neighbors': 3, 'weights': 'uniform'}
+[ 2025-10-14 13:01:44,305 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-10-14 13:01:44,306 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-10-14 13:01:44,306 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-10-14 13:01:44,307 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-10-14 13:01:44,307 ] 38 root - INFO - data Transformation completed
+[ 2025-10-14 13:01:44,307 ] 40 root - INFO - Model Training started
+[ 2025-10-14 13:03:11,744 ] 104 root - INFO - Starting MLflow run for model: Random Forest
+[ 2025-10-14 13:03:11,925 ] 127 root - INFO - Logged preprocessor artifact from: Artifacts/10_14_2025_13_01_37/data_transformation/transformed_object/preprocessing.pkl
+[ 2025-10-14 13:03:13,467 ] 139 root - INFO - Logged model: Random Forest
+[ 2025-10-14 13:03:13,468 ] 46 root - INFO - Entered the save_object method of MainUtils class
+[ 2025-10-14 13:03:13,480 ] 50 root - INFO - Exited the save_object method of MainUtils class
+[ 2025-10-14 13:03:13,480 ] 153 root - INFO - Model trainer artifact: ModelTrainerArtifact(trained_model_file_path='Artifacts/10_14_2025_13_01_37/model_trainer/trained_model/model.pkl', train_metric_artifact=ClassificationMetricArtifact(f1_score=0.991691995947315, precision_score=0.990487755515078, recall_score=0.9928991681882735), test_metric_artifact=ClassificationMetricArtifact(f1_score=0.9713825070536074, precision_score=0.9616919393455706, recall_score=0.9812703583061889))
+[ 2025-10-14 13:03:13,480 ] 45 root - INFO - Model Training artifact created

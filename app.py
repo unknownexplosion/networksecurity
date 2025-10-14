@@ -19,10 +19,14 @@ from uvicorn import run as app_run
 from fastapi.responses import Response
 from starlette.responses import RedirectResponse
 import pandas as pd
+from pydantic import BaseModel
 
 from networksecurity.utils.main_utils.utils import load_object
 
 from networksecurity.utils.ml_utils.model.estimator import NetworkModel
+
+class URLRequest(BaseModel):
+    url_features: list
 
 
 client = pymongo.MongoClient(mongo_db_url, tlsCAFile=ca)
@@ -64,24 +68,47 @@ async def train_route():
 async def predict_route(request: Request,file: UploadFile = File(...)):
     try:
         df=pd.read_csv(file.file)
-        #print(df)
         preprocesor=load_object("final_model/preprocessor.pkl")
         final_model=load_object("final_model/model.pkl")
         network_model = NetworkModel(preprocessor=preprocesor,model=final_model)
-        print(df.iloc[0])
         y_pred = network_model.predict(df)
-        print(y_pred)
         df['predicted_column'] = y_pred
-        print(df['predicted_column'])
-        #df['predicted_column'].replace(-1, 0)
-        #return df.to_json()
+        
+        # Create prediction_output directory if it doesn't exist
+        os.makedirs('prediction_output', exist_ok=True)
         df.to_csv('prediction_output/output.csv')
+        
         table_html = df.to_html(classes='table table-striped')
-        #print(table_html)
         return templates.TemplateResponse("table.html", {"request": request, "table": table_html})
         
     except Exception as e:
             raise NetworkSecurityException(e,sys)
+
+@app.post("/predict_single")
+async def predict_single_url(url_data: URLRequest):
+    try:
+        # Create DataFrame from single URL features
+        feature_names = ['having_IP_Address','URL_Length','Shortining_Service','having_At_Symbol',
+                        'double_slash_redirecting','Prefix_Suffix','having_Sub_Domain','SSLfinal_State',
+                        'Domain_registeration_length','Favicon','port','HTTPS_token','Request_URL',
+                        'URL_of_Anchor','Links_in_tags','SFH','Submitting_to_email','Abnormal_URL',
+                        'Redirect','on_mouseover','RightClick','popUpWidnow','Iframe','age_of_domain',
+                        'DNSRecord','web_traffic','Page_Rank','Google_Index','Links_pointing_to_page',
+                        'Statistical_report']
+        
+        df = pd.DataFrame([url_data.url_features], columns=feature_names)
+        
+        preprocesor=load_object("final_model/preprocessor.pkl")
+        final_model=load_object("final_model/model.pkl")
+        network_model = NetworkModel(preprocessor=preprocesor,model=final_model)
+        
+        y_pred = network_model.predict(df)
+        result = "Phishing" if y_pred[0] == 1 else "Safe"
+        
+        return {"prediction": result, "confidence": float(y_pred[0])}
+        
+    except Exception as e:
+        raise NetworkSecurityException(e,sys)
 
     
 if __name__=="__main__":
