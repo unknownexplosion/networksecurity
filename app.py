@@ -80,6 +80,11 @@ async def train_route():
 async def predict_route(request: Request,file: UploadFile = File(...)):
     try:
         df=pd.read_csv(file.file)
+        
+        # Drop the target column if present (it shouldn't be used for prediction)
+        if 'Result' in df.columns:
+            df = df.drop(columns=['Result'])
+        
         preprocesor=load_object("final_model/preprocessor.pkl")
         final_model=load_object("final_model/model.pkl")
         network_model = NetworkModel(preprocessor=preprocesor,model=final_model)
@@ -101,6 +106,11 @@ async def predict_csv_route(file: UploadFile = File(...)):
     """CSV prediction endpoint that returns JSON - for Streamlit Cloud compatibility"""
     try:
         df=pd.read_csv(file.file)
+        
+        # Drop the target column if present (it shouldn't be used for prediction)
+        if 'Result' in df.columns:
+            df = df.drop(columns=['Result'])
+        
         preprocesor=load_object("final_model/preprocessor.pkl")
         final_model=load_object("final_model/model.pkl")
         network_model = NetworkModel(preprocessor=preprocesor,model=final_model)
