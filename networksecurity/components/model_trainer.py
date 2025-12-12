@@ -25,7 +25,7 @@ from sklearn.ensemble import (
 import mlflow
 from urllib.parse import urlparse
 
-import dagshub
+
 
 # Initialize DagsHub with environment variables
 #dagshub.init(repo_owner=os.getenv('DAGSHUB_REPO_OWNER', 'unknownexplosion'), 
