@@ -1,4 +1,4 @@
-name: Optimized CI/CD Workflow
+name: CI Pipeline
 
 on:
   push:
@@ -7,20 +7,15 @@ on:
       - 'README.md'
       - '**.md'
       - 'docs/**'
-
-env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-  IMAGE_TAG: latest
-  CONTAINER_NAME: networksecurity
-  APP_PORT: 8000
+  pull_request:
+    branches: [main]
 
 jobs:
   # ==============================================================================
-  # CONTINUOUS INTEGRATION
+  # CONTINUOUS INTEGRATION - Basic Checks
   # ==============================================================================
-  integration:
-    name: 🔍 Continuous Integration
+  ci:
+    name: 🔍 CI Checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     
@@ -28,249 +23,51 @@ jobs:
       - name: 📥 Checkout Code
         uses: actions/checkout@v4
 
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_backend.txt
+          echo "✅ Dependencies installed"
+
       - name: 🔍 Lint Code
         run: |
-          echo "🔍 Linting repository..."
-          # Check for basic file structure
-          if [ ! -f "app.py" ]; then
-            echo "❌ app.py not found"
-            exit 1
-          fi
-          if [ ! -f "requirements.txt" ]; then
-            echo "❌ requirements.txt not found"
-            exit 1
-          fi
-          if [ ! -f "Dockerfile" ]; then
-            echo "❌ Dockerfile not found"
-            exit 1
-          fi
-          echo "✅ All required files found"
+          echo "🔍 Checking required files..."
+          test -f "app.py" && echo "✅ app.py found" || exit 1
+          test -f "requirements_backend.txt" && echo "✅ requirements_backend.txt found" || exit 1
+          test -f "Dockerfile" && echo "✅ Dockerfile found" || exit 1
+          test -f "streamlit_app.py" && echo "✅ streamlit_app.py found" || exit 1
+          echo "✅ All required files present"
 
-      - name: 🧪 Run Unit Tests
+      - name: 🐳 Validate Dockerfile
         run: |
-          echo "🧪 Running unit tests..."
-          # Add your actual test commands here
-          echo "✅ Tests completed"
-
-  # ==============================================================================
-  # BUILD AND PUSH TO ECR
-  # ==============================================================================
-  build-and-push-ecr-image:
-    name: 🏗️ Continuous Delivery
-    needs: integration
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    
-    outputs:
-      image: ${{ steps.build-image.outputs.image }}
-    
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🔧 Install Utilities
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip curl
-          echo "✅ Utilities installed"
-
-      - name: ☁️ Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: 🔍 Verify AWS Configuration
-        run: |
-          echo "AWS Region: ${{ env.AWS_REGION }}"
-          echo "ECR Repository: ${{ env.ECR_REPOSITORY }}"
-          aws sts get-caller-identity
-          echo "✅ AWS configuration verified"
-
-      - name: 🏗️ Create ECR Repository if needed
-        run: |
-          echo "🔍 Checking ECR repository..."
-          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} 2>/dev/null || {
-            echo "📝 Creating ECR repository..."
-            aws ecr create-repository \
-              --repository-name ${{ env.ECR_REPOSITORY }} \
-              --image-scanning-configuration scanOnPush=true
-            echo "✅ Repository created"
-          }
-
-      - name: 🔑 Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: 🐳 Build, Tag, and Push Docker Image
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-        run: |
-          echo "🏗️ Building Docker image..."
-          echo "Registry: $ECR_REGISTRY"
-          echo "Repository: $ECR_REPOSITORY"
-          echo "Tag: $IMAGE_TAG"
-          
-          # Build with better error handling
-          if ! docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .; then
-            echo "❌ Docker build failed"
-            exit 1
-          fi
-          
-          echo "✅ Build successful"
-          echo "📤 Pushing to ECR..."
-          
-          if ! docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG; then
-            echo "❌ Docker push failed"
-            exit 1
-          fi
-          
-          echo "✅ Push successful"
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-
-  # ==============================================================================
-  # CONTINUOUS DEPLOYMENT
-  # ==============================================================================
-  continuous-deployment:
-    name: 🚀 Continuous Deployment
-    needs: build-and-push-ecr-image
-    runs-on: self-hosted
-    timeout-minutes: 15
-    
-    steps:
-      - name: 📥 Checkout Code
-        uses: actions/checkout@v4
-
-      - name: 🧹 Pre-deployment Cleanup
-        run: |
-          # Clean Git configurations
-          git config --global --unset-all safe.directory 2>/dev/null || true
-          git config --local --unset-all core.sshCommand 2>/dev/null || true
-          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
-          echo "✅ Git cleanup completed"
+          echo "🔍 Validating Dockerfile syntax..."
+          docker build --check . 2>/dev/null || docker build -f Dockerfile --no-cache --progress=plain . -t test-build 2>&1 | head -50
+          echo "✅ Dockerfile validation complete"
         continue-on-error: true
 
-      - name: ☁️ Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: 🔍 Verify System Environment
+      - name: 🧪 Syntax Check
         run: |
-          echo "🔍 System Check:"
-          echo "Docker: $(docker --version)"
-          echo "AWS CLI: $(aws --version)"
-          echo "Available Memory: $(free -h | grep '^Mem' | awk '{print $7}')"
-          echo "Available Disk: $(df -h . | tail -1 | awk '{print $4}')"
-          aws sts get-caller-identity
+          echo "🔍 Checking Python syntax..."
+          python -m py_compile app.py
+          python -m py_compile streamlit_app.py
+          echo "✅ Python syntax valid"
 
-      - name: 🔑 Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: 📥 Pull Latest Image
+      - name: 📋 Summary
         run: |
-          echo "📥 Pulling latest image..."
-          image_uri="${{ secrets.AWS_ECR_LOGIN_URI }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
-          
-          if ! docker pull "$image_uri"; then
-            echo "❌ Failed to pull image: $image_uri"
-            echo "Available images in ECR:"
-            aws ecr list-images --repository-name ${{ env.ECR_REPOSITORY }} --max-items 5
-            exit 1
-          fi
-          echo "✅ Image pulled successfully"
-
-      - name: 🛑 Stop and Remove Existing Container
-        run: |
-          # Stop running container
-          if container_id=$(docker ps -q -f name=${{ env.CONTAINER_NAME }}); then
-            echo "🛑 Stopping existing container: $container_id"
-            docker stop $container_id
-            docker rm $container_id
-            echo "✅ Container stopped and removed"
-          else
-            echo "ℹ️ No running container found"
-          fi
-          
-          # Clean up any stopped containers with the same name
-          if stopped_id=$(docker ps -aq -f name=${{ env.CONTAINER_NAME }}); then
-            echo "🧹 Removing stopped container: $stopped_id"
-            docker rm $stopped_id
-          fi
-        continue-on-error: true
-
-      - name: 🔌 Check Port Availability
-        run: |
-          if netstat -tuln | grep :${{ env.APP_PORT }}; then
-            echo "⚠️ Port ${{ env.APP_PORT }} is in use, attempting cleanup..."
-            sudo lsof -ti:${{ env.APP_PORT }} | xargs -r sudo kill -9 2>/dev/null || true
-            sleep 3
-          fi
-          echo "✅ Port ${{ env.APP_PORT }} check completed"
-        continue-on-error: true
-
-      - name: 🚀 Run Docker Container
-        run: |
-          echo "🚀 Starting new container..."
-          
-          docker run -d \
-            -p ${{ env.APP_PORT }}:${{ env.APP_PORT }} \
-            --ipc="host" \
-            --name=${{ env.CONTAINER_NAME }} \
-            --restart=unless-stopped \
-            -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-            -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            -e AWS_REGION="${{ env.AWS_REGION }}" \
-            -e MONGODB_URL_KEY="${{ secrets.MONGODB_URL_KEY }}" \
-            ${{ secrets.AWS_ECR_LOGIN_URI }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          
-          echo "✅ Container started successfully"
-
-      - name: ⏳ Verify Deployment
-        run: |
-          echo "⏳ Verifying deployment..."
-          sleep 10
-          
-          # Check if container is running
-          if docker ps -q -f name=${{ env.CONTAINER_NAME }} | grep -q .; then
-            echo "✅ Container is running"
-            echo ""
-            echo "📊 Container Status:"
-            docker ps -f name=${{ env.CONTAINER_NAME }} --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-            echo ""
-            echo "📋 Recent logs:"
-            docker logs --tail 10 ${{ env.CONTAINER_NAME }}
-          else
-            echo "❌ Container failed to start"
-            echo "📋 Container logs:"
-            docker logs ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "No logs available"
-            exit 1
-          fi
-
-      - name: 🧹 Clean Up Resources
-        run: |
-          echo "🧹 Cleaning up old Docker resources..."
-          # Remove unused images and containers
-          docker system prune -f
-          
-          # Remove old images (keep current one)
-          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.CreatedSince}}" | \
-          grep ${{ env.ECR_REPOSITORY }} | grep -v latest | tail -n +3 | awk '{print $3}' | \
-          xargs -r docker rmi -f 2>/dev/null || true
-          
-          echo "✅ Cleanup completed"
-
-      - name: 🧹 Post-deployment Git Cleanup
-        run: |
-          # Final Git cleanup
-          git config --global --unset-all safe.directory 2>/dev/null || true
-          git config --local --unset-all core.sshCommand 2>/dev/null || true
-          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
-        continue-on-error: true
+          echo "=============================================="
+          echo "✅ CI Pipeline Completed Successfully!"
+          echo "=============================================="
+          echo ""
+          echo "📦 Deployment Notes:"
+          echo "  - Backend: Auto-deploys to Render.com on push"
+          echo "  - Frontend: Auto-deploys to Streamlit Cloud on push"
+          echo ""
+          echo "🔗 Links:"
+          echo "  - Streamlit: https://phisingdection.streamlit.app"
+          echo "=============================================="
