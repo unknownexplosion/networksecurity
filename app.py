@@ -39,12 +39,9 @@ collection = database[DATA_INGESTION_COLLECTION_NAME]
 
 app = FastAPI()
 
-# CORS Configuration - restrict origins for security
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS", 
-    "http://localhost:8501,http://localhost:3000"
-).split(",")
-origins = ALLOWED_ORIGINS
+# CORS Configuration - allow all origins for cloud deployments
+# In production, you may want to restrict this to specific domains
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,6 +95,33 @@ async def predict_route(request: Request,file: UploadFile = File(...)):
         
     except Exception as e:
             raise NetworkSecurityException(e,sys)
+
+@app.post("/predict_csv")
+async def predict_csv_route(file: UploadFile = File(...)):
+    """CSV prediction endpoint that returns JSON - for Streamlit Cloud compatibility"""
+    try:
+        df=pd.read_csv(file.file)
+        preprocesor=load_object("final_model/preprocessor.pkl")
+        final_model=load_object("final_model/model.pkl")
+        network_model = NetworkModel(preprocessor=preprocesor,model=final_model)
+        y_pred = network_model.predict(df)
+        df['predicted_column'] = y_pred
+        
+        # Return JSON instead of HTML template
+        return {"predictions": df.to_dict(orient='records')}
+        
+    except FileNotFoundError as e:
+        logging.error(f"Model file not found: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Model files not found. Please ensure models are trained and available."
+        )
+    except Exception as e:
+        logging.error(f"CSV Prediction error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(e)}"
+        )
 
 @app.post("/predict_single")
 async def predict_single_url(url_data: URLRequest):
