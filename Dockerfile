@@ -5,13 +5,8 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt /app/
 
-# Install system dependencies and Python packages
-RUN apt-get update -y && \
-    apt-get install -y curl unzip && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir awscli && \
+# Install Python packages only
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
