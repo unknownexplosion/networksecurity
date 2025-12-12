@@ -2,8 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements.txt /app/
+# Copy requirements and setup.py first for better caching
+COPY requirements.txt setup.py /app/
 
 # Install Python packages only
 RUN pip install --no-cache-dir --upgrade pip && \
