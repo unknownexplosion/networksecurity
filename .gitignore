@@ -14,7 +14,6 @@ __pycache__/
 
 # Build artifacts
 artifacts/
-final_model/
 mlruns/
 
 # macOS
