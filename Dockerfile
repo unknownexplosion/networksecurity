@@ -3,11 +3,11 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Copy requirements and setup.py first for better caching
-COPY requirements.txt setup.py /app/
+COPY requirements_backend.txt setup.py /app/
 
 # Install Python packages only
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements_backend.txt
 
 # Copy application code
 COPY . /app/
