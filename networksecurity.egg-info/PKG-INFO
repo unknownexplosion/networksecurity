@@ -1,5 +1,24 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: networksecurity
 Version: 0.0.1
 Author: Anubhav Mukherjee
 Author-email: anubhavmukherjee28@gmail.com
+Requires-Dist: python-dotenv
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: pymongo
+Requires-Dist: certifi
+Requires-Dist: pymongo[srv]
+Requires-Dist: scikit-learn
+Requires-Dist: mlflow
+Requires-Dist: pyaml
+Requires-Dist: dagshub
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: python-multipart
+Requires-Dist: jinja2
+Requires-Dist: streamlit
+Requires-Dist: requests
+Dynamic: author
+Dynamic: author-email
+Dynamic: requires-dist

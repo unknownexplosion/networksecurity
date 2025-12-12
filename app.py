@@ -14,7 +14,7 @@ from networksecurity.logging.logger import logging
 from networksecurity.pipeline.training_pipeline import TrainingPipeline
 
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, File, UploadFile,Request
+from fastapi import FastAPI, File, UploadFile, Request, HTTPException
 from uvicorn import run as app_run
 from fastapi.responses import Response
 from starlette.responses import RedirectResponse
@@ -38,7 +38,13 @@ database = client[DATA_INGESTION_DATABASE_NAME]
 collection = database[DATA_INGESTION_COLLECTION_NAME]
 
 app = FastAPI()
-origins = ["*"]
+
+# CORS Configuration - restrict origins for security
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:8501,http://localhost:3000"
+).split(",")
+origins = ALLOWED_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,6 +60,15 @@ templates = Jinja2Templates(directory="./networksecurity/templates")
 @app.get("/", tags=["authentication"])
 async def index():
     return RedirectResponse(url="/docs")
+
+@app.get("/health", tags=["monitoring"])
+async def health_check():
+    """Health check endpoint for monitoring and load balancers"""
+    return {
+        "status": "healthy",
+        "service": "networksecurity-api",
+        "version": "0.0.1"
+    }
 
 @app.get("/train")
 async def train_route():
@@ -87,6 +102,21 @@ async def predict_route(request: Request,file: UploadFile = File(...)):
 @app.post("/predict_single")
 async def predict_single_url(url_data: URLRequest):
     try:
+        # Input validation
+        if len(url_data.url_features) != 30:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Expected 30 features, got {len(url_data.url_features)}. Please provide all required URL features."
+            )
+        
+        # Validate feature values (should be in [-1, 0, 1])
+        for i, val in enumerate(url_data.url_features):
+            if val not in [-1, 0, 1]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Feature at index {i} has invalid value {val}. All features must be -1, 0, or 1."
+                )
+        
         # Create DataFrame from single URL features
         feature_names = ['having_IP_Address','URL_Length','Shortining_Service','having_At_Symbol',
                         'double_slash_redirecting','Prefix_Suffix','having_Sub_Domain','SSLfinal_State',
@@ -107,9 +137,24 @@ async def predict_single_url(url_data: URLRequest):
         
         return {"prediction": result, "confidence": float(y_pred[0])}
         
+    except HTTPException:
+        raise  # Re-raise HTTPException without wrapping
+    except FileNotFoundError as e:
+        logging.error(f"Model file not found: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Model files not found. Please ensure models are trained and available."
+        )
     except Exception as e:
-        raise NetworkSecurityException(e,sys)
+        logging.error(f"Prediction error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(e)}"
+        )
 
     
 if __name__=="__main__":
-    app_run(app,host="0.0.0.0",port=8000)
+    # Use PORT environment variable for cloud deployments
+    port = int(os.getenv("PORT", 8000))
+    logging.info(f"Starting server on port {port}")
+    app_run(app, host="0.0.0.0", port=port)
